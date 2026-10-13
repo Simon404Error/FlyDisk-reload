@@ -1,4 +1,4 @@
-# FlyDisk 硬盘加速器，让硬盘飞起来！ ！
+# FlyDisk 磁盘加速器，让硬盘飞起来！ ！
 
 > 上游项目：[youke1686/FlyDisk](https://github.com/youke1686/FlyDisk)
 
