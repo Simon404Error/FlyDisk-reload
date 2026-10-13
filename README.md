@@ -1,6 +1,6 @@
 # FlyDisk 磁盘加速器，让磁盘飞起来！ ！
 
-** 本Fork 发行版-特殊构建，本人用着没什么问题，建议各位去给上游仓库点个star **
+**本Fork 发行版-特殊构建，本人用着没什么问题，建议各位去给上游仓库点个star**
 
 > 上游项目：[youke1686/FlyDisk](https://github.com/youke1686/FlyDisk)
 
