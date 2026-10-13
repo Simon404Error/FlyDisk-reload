@@ -35,6 +35,30 @@ namespace FlyDisk.Models
         /// </summary>
         public string Language { get; set; } = string.Empty;
 
+        // ===== 开机与自动化（2026-10-13 新增，见 StartupService / BootDiskPreparation）=====
+        // 口径：本程序是管理员程序（requireAdministrator），**不能**用注册表 Run 键自启（每次登录会弹 UAC）。
+        // 因此自启改为由程序自己创建/维护计划任务：
+        //   · \FlyDisk\KeepOffline：开机触发（无需登录，以 SYSTEM 运行），只把「开机目标盘」脱机后立刻退出；
+        //   · \FlyDisk\AutoStart  ：用户登录触发（当前用户 + 最高权限），带界面启动本程序，不弹 UAC。
+        // 「保持脱机」之所以能跨进程生效：脱机属性是 persist=true 写进系统的，进程退出后盘仍然脱机
+        //（与「停止加速后盘保持脱机」同一机制，见 PhysicalDiskHandle 类注释）。
+
+        /// <summary>登录后自动启动本程序界面（由程序创建/维护计划任务，见 <c>StartupService</c>）</summary>
+        public bool RunAtStartup { get; set; } = false;
+
+        /// <summary>开机（含未登录时）把「开机目标盘」整盘脱机，避免被系统/其它程序占用而无法加速</summary>
+        public bool KeepOfflineOnBoot { get; set; } = false;
+
+        /// <summary>
+        /// 开机目标盘的身份串列表（`型号|序列号`，见 <see cref="PhysicalDiskHandle.DescribeIdentity"/>）。
+        ///
+        /// **刻意不用盘符，也不用盘号**：盘号只是枚举顺序（插拔一次就可能指到另一块盘），
+        /// 而盘符属于卷、不是物理盘——本程序对目标盘做的是**整盘脱机**，脱机后卷随之消失、盘符根本不存在，
+        /// 开机时正是"盘已脱机"的状态，用盘符将无法定位。盘符只在**选择与展示**时作为辅助出现
+        ///（见设置窗口「开机与自动化」里的「按盘符添加」与已选摘要）。
+        /// </summary>
+        public List<string> StartupDiskIdentities { get; set; } = new();
+
         // ===== 目标设备（iSCSI target）=====
 
         /// <summary>
@@ -48,6 +72,13 @@ namespace FlyDisk.Models
         /// **粒度是整盘，不是单分区**：同一块盘上的其他卷会一起被 export，停止时也一起回来。
         /// </summary>
         public string PhysicalDiskIdentity { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 上次「启动加速」里选中的**全部**盘身份串（多盘同时加速，见 AGENTS.md §2.1）。
+        /// 与 <see cref="PhysicalDiskIdentity"/> 同口径：**只用于下次在选盘框里预选**，绝不作为启动依据
+        /// （保留单值那个字段是为了兼容旧配置与"上次那块盘"的既有用法）。
+        /// </summary>
+        public List<string> LastAcceleratedDiskIdentities { get; set; } = new();
 
         /// <summary>目标 IQN（发起程序里看到的目标名）</summary>
         public string TargetIqn { get; set; } = "iqn.flydisk:acceleration-disk";

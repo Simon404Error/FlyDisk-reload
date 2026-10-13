@@ -29,7 +29,7 @@
 
 | 层 | 命名空间 | 主要内容 |
 | --- | --- | --- |
-| 界面层 | `FlyDisk` | `Form1`（启停 + 状态栏 + 菜单 + 日志 + **L2 启动前预检**）、`Settings`、`Inspector`、`RemoteForm`、`PickerForm`（通用选择框）、`L2Manage`、`L2Verify` 的 UI 部分、`HelpDocument`、`UpdateService`、`Program` |
+| 界面层 | `FlyDisk` | `Form1`（启停 + 状态栏 + 菜单 + 日志 + **L2 启动前预检**）、`Settings`、`Inspector`、`RemoteForm`、`PickerForm`（通用选择框，可选多选）、`L2Manage`、`L2Verify` 的 UI 部分、`HelpDocument`、`UpdateService`、`StartupService`（开机计划任务）、`BootDiskPreparation`（开机保持脱机）、`Program` |
 | 引擎层 | `FlyDisk.Engine` | `TargetService`、`CachedPhysicalDisk`、`PhysicalDiskHandle`、`IBlockSource`、`CacheService`（L1）、`SsdCacheService`（L2）、`RemotePeer` / `RemoteProtocol`、`IscsiInitiator`、`LogService`、`SystemMemory`、`L2Verifier` |
 | 模型层 | `FlyDisk.Models` | `DiskConfig`、`CacheStats`、`ConfigService`、`ServiceConstants` |
 | 主题层 | `FlyDisk.Theming` | `ThemeManager` / `ThemePalette` / `ThemedForm` / `ThemedTabControl` / `AppIcon` / `ShortcutIcon`（浅色 / 深色） |
@@ -62,6 +62,21 @@
 - **自动挂载**（`Engine/IscsiInitiator.cs`）：`MSiSCSI 服务在跑 → AddIScsiSendTargetPortalW → LoginIScsiTargetW`；
   **只清理本程序的会话/门户，不停止系统 MSiSCSI 服务**。两处硬约束：`IsInformationalSession = false`（为真 PnP 不枚举 LUN）、
   `IsPersistent = false`（为真会写持久登录、与本程序全权管生管死冲突）。任一步失败**不硬失败**，只记录 + 提示手动挂载。
+- **多盘同时加速（2026-10-13 落地；路线 A：多实例）**：主界面「启动加速」的选盘框可**多选**，选几块就同时加速几块。
+  口径（改动集中在 `Form1`，引擎只改一处必须改的）：
+  - **一块盘 = 一个 `TargetService` 实例**（`Form1.LocalSession`）：第一块盘用主实例（配置原值），第二块起各自
+    `new TargetService(config 副本)`；副本由 `Form1.BuildSessionConfig` 派生——**端口 = 配置端口 + 序号、
+    IQN = 配置 IQN + 后缀**（每块盘各用各的端点，互不干扰）。
+  - **L2 只给第一块盘**：L2 容器头记着归属盘身份、一个容器只能属于一块盘，而当前口径是"不动 L2 代码"
+    ⇒ 其余盘 `EnableSsdCache = false`（仅 L1 + 写透传）。"每盘独立 L2 容器"见 TODO.md 后续项。
+  - **逐块独立成败**：一块失败/被拒**不影响**其它块，末尾汇总"成功 N/M"；已成功的会话不回滚，
+    由「停止加速（全部 N 块）」统一收尾（每个会话按**自己的端口**判"还有连接就拒绝停止"）。
+  - **克隆盘检查必须按身份配对**：`CheckCloneDisk` 的"登录前后盘号差集"是**全机**的，多会话下会看到别人的克隆盘
+    ⇒ `TargetService.LooksLikeCloneOfThisSource`（型号 + 容量与本源盘一致）先滤一遍，否则会张冠李戴地告警。
+  - **克隆盘自动恢复（整套停止再重来）只给第一块盘做**：那套流程会牵动别的会话；额外会话遇到克隆盘问题
+    只**单独停掉自己**并如实告知（`main.log.multiDiskCloneProblem`）。
+  - **检查器只显示主会话**（第一块盘），多盘时打开会明确告知（`main.log.inspectorPrimaryOnly`）。
+  - 与远程形态的关系不变：远程仍是**单会话**，且与本地加速互斥（本地有会话在跑时「远程」置灰）。
 
 ### 2.2 L1（内存缓存）
 
@@ -139,6 +154,35 @@
 - 高频成功痕迹默认不落盘（前缀表 `LogService.TracePrefixes`），失败 / 异常 / 探针行始终落盘；
   需要完整逐笔账本时把 `config.json` 的 `TraceFileLogging` 设为 `true` 并重启（启动时界面日志会报当前模式）。
 
+### 2.7 开机自动化（自启 / 保持脱机）
+
+- **自启一律用计划任务，绝不用注册表 Run 键**：本程序 `requireAdministrator`，Run 键在登录时启动会弹 UAC（或被静默拒绝）。
+  计划任务可声明"以最高权限运行"，由系统直接拉起，**无 UAC 提示**（实现见 `StartupService`）。
+- **两条任务，各管一件事**（"无需登录也要脱机"与"登录后要看到界面"不可能由同一个进程完成——
+  以 SYSTEM 在无人登录时启动的进程，其窗口不会出现在任何用户桌面上）：
+
+  | 任务 | 触发器 | 身份 | 命令 | 作用 |
+  | --- | --- | --- | --- | --- |
+  | `\FlyDisk\KeepOffline` | 开机（`BootTrigger`，延迟 `PT1M`） | `SYSTEM` | `FlyDisk.exe --keep-offline-only` | 把「开机目标盘」脱机后**立刻退出**，不建界面 |
+  | `\FlyDisk\AutoStart` | 用户登录（`LogonTrigger`） | 创建时的当前用户 | `FlyDisk.exe` | 带界面启动（登录后可见），启动期再幂等确认一次脱机 |
+
+  两条都设 `MultipleInstancesPolicy = IgnoreNew`；主程序的单实例互斥体逻辑**不变**（仍是按登录会话作用域），
+  开机那条走独立互斥体 `Global\FlyDisk.KeepOffline`，两条路径互不干扰（见 `BootDiskPreparation`）。
+- **`--keep-offline-only` 分支（`Program.Main`）**：不建窗体、不初始化主题/快捷方式/帮助文档，
+  只读配置 → 逐盘保持脱机 → 写 `debug-security.log` → 用退出码表达结果。**该分支绝不外抛**。
+- **「保持脱机」的唯一执行处是 `BootDiskPreparation.Prepare`**（GUI 启动期与上述分支共用），其不变量：
+  1. 只处理 `DiskConfig.StartupDiskIdentities` 里**被选中的盘**，绝不自动挑盘；
+  2. **硬拦不可绕过**：动手前必须过 `PhysicalDiskHandle.DescribeTargetDiskBlockReason`——
+     脱机系统盘 / 本程序所在盘 / **分页文件所在盘**分别是"送走 Windows / 送走本程序 / 当场蓝屏 0x7A"，
+     判据与选盘对话框、引擎启动校验共用同一份，**不得另写一套**；
+  3. 幂等 + 失败重试（盘可能被短暂占用）；失败只如实上报（界面日志框 / 诊断日志），不抛、不拦启动；
+  4. 调 `PhysicalDiskHandle.TryOffline`（`persist=true`、**不**开独占句柄）：脱机属性写进系统后进程退出也依然有效，
+     所以"短命进程也能长期保持脱机"成立（与「停止加速后盘保持脱机」同一机制）。
+- **目标盘存的是设备身份串**（`型号|序列号`），**不存盘号也不存盘符**：盘号只是枚举顺序；盘符属于卷，
+  而整盘脱机后卷消失、盘符根本不存在（开机时目标盘恰恰就是"已脱机"）。盘符只作为**选择/展示**入口
+  （设置窗口「按盘符添加」与已选摘要，见 `Settings.RefreshStartupDiskSummary`）。
+- **本功能不做"运行期盯守"**：只保证"开机那一刻是脱机的"；用户在运行中手动把盘联机（磁盘管理）程序不会自动再脱机。
+
 ***
 
 ## 三、目录结构
@@ -165,6 +209,8 @@ d:\projects\FlyDisk\
 │   ├── L2Verify.cs                # L2 校验/修复（Engine.L2Verifier + L2VerifyForm，单文件）
 │   ├── HelpDocument.cs / 帮助文档.html   # 帮助文档（单文件双语，嵌入 exe + 每次启动覆盖落盘）
 │   ├── UpdateService.cs           # 检查更新（只比 csproj 里的 <Version> 是否不同）
+│   ├── StartupService.cs          # ★ 开机自启与「开机保持脱机」的计划任务管理（见 §2.7）
+│   ├── BootDiskPreparation.cs     # ★ 开机把「开机目标盘」保持脱机（GUI 与 --keep-offline-only 共用，见 §2.7）
 │   ├── Engine/                    # namespace FlyDisk.Engine
 │   ├── Models/                    # namespace FlyDisk.Models
 │   ├── Theming/                   # 浅色 / 深色主题

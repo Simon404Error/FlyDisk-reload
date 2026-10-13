@@ -69,6 +69,14 @@ namespace FlyDisk
             lblSsdConservativeVal = new Label();
             btnL2Manage = new Button();
             lblMemEstimate = new Label();
+            groupBoxStartup = new GroupBox();
+            chkRunAtStartup = new CheckBox();
+            chkKeepOfflineOnBoot = new CheckBox();
+            lblDriveLetters = new Label();
+            txtDriveLetters = new TextBox();
+            btnAddByDrive = new Button();
+            btnPickStartupDisks = new Button();
+            lblStartupDisks = new Label();
             ((System.ComponentModel.ISupportInitialize)trackEviction).BeginInit();
             ((System.ComponentModel.ISupportInitialize)trackStop).BeginInit();
             ((System.ComponentModel.ISupportInitialize)trackSsdConservative).BeginInit();
@@ -77,6 +85,7 @@ namespace FlyDisk
             groupBoxDisk.SuspendLayout();
             groupBoxCache.SuspendLayout();
             groupBoxSsd.SuspendLayout();
+            groupBoxStartup.SuspendLayout();
             SuspendLayout();
             // 
             // chkEnableCache
@@ -132,7 +141,7 @@ namespace FlyDisk
             // 
             // btnSave
             // 
-            btnSave.Location = new Point(310, 618);
+            btnSave.Location = new Point(310, 768);
             btnSave.Name = "btnSave";
             btnSave.Size = new Size(100, 35);
             btnSave.TabIndex = 5;
@@ -143,7 +152,7 @@ namespace FlyDisk
             // btnDocs
             // 
             // 底部左下角：与「确定并保存」同一行、分居两端（风险动作在右，轻量入口在左）
-            btnDocs.Location = new Point(20, 618);
+            btnDocs.Location = new Point(20, 768);
             btnDocs.Name = "btnDocs";
             btnDocs.Size = new Size(100, 35);
             btnDocs.TabIndex = 21;
@@ -313,11 +322,96 @@ namespace FlyDisk
             // 窗口底部的"预计额外内存"提示：文本由 Settings.UpdateMemoryEstimate() 动态生成（含数字，不登记静态绑定）
             lblMemEstimate.AutoSize = false;
             lblMemEstimate.ForeColor = SystemColors.GrayText;
-            lblMemEstimate.Location = new Point(20, 566);
+            lblMemEstimate.Location = new Point(20, 716);
             lblMemEstimate.Name = "lblMemEstimate";
             lblMemEstimate.Size = new Size(285, 44);
             lblMemEstimate.TabIndex = 20;
             lblMemEstimate.TextAlign = ContentAlignment.MiddleLeft;
+            // 
+            // groupBoxStartup
+            // 
+            groupBoxStartup.Controls.Add(chkRunAtStartup);
+            groupBoxStartup.Controls.Add(chkKeepOfflineOnBoot);
+            groupBoxStartup.Controls.Add(lblDriveLetters);
+            groupBoxStartup.Controls.Add(txtDriveLetters);
+            groupBoxStartup.Controls.Add(btnAddByDrive);
+            groupBoxStartup.Controls.Add(btnPickStartupDisks);
+            groupBoxStartup.Controls.Add(lblStartupDisks);
+            groupBoxStartup.Location = new Point(20, 566);
+            groupBoxStartup.Name = "groupBoxStartup";
+            groupBoxStartup.Size = new Size(390, 150);
+            groupBoxStartup.TabIndex = 22;
+            groupBoxStartup.TabStop = false;
+            groupBoxStartup.Text = "开机与自动化";
+            // 
+            // chkRunAtStartup
+            // 
+            chkRunAtStartup.AutoSize = true;
+            chkRunAtStartup.Location = new Point(15, 22);
+            chkRunAtStartup.Name = "chkRunAtStartup";
+            chkRunAtStartup.Size = new Size(250, 21);
+            chkRunAtStartup.TabIndex = 0;
+            chkRunAtStartup.Text = "登录后自动启动本程序（计划任务，无 UAC 提示）";
+            chkRunAtStartup.UseVisualStyleBackColor = true;
+            // 
+            // chkKeepOfflineOnBoot
+            // 
+            chkKeepOfflineOnBoot.AutoSize = true;
+            chkKeepOfflineOnBoot.Location = new Point(15, 48);
+            chkKeepOfflineOnBoot.Name = "chkKeepOfflineOnBoot";
+            chkKeepOfflineOnBoot.Size = new Size(300, 21);
+            chkKeepOfflineOnBoot.TabIndex = 1;
+            chkKeepOfflineOnBoot.Text = "开机（含未登录）把下列硬盘保持脱机，避免被占用";
+            chkKeepOfflineOnBoot.UseVisualStyleBackColor = true;
+            chkKeepOfflineOnBoot.CheckedChanged += chkKeepOffline_CheckedChanged;
+            // 
+            // lblDriveLetters
+            // 
+            lblDriveLetters.AutoSize = true;
+            lblDriveLetters.Location = new Point(15, 77);
+            lblDriveLetters.Name = "lblDriveLetters";
+            lblDriveLetters.Size = new Size(38, 17);
+            lblDriveLetters.TabIndex = 2;
+            lblDriveLetters.Text = "盘符:";
+            // 
+            // txtDriveLetters
+            // 
+            // 允许直接敲盘符（如 `Y,Z`）来添加：这是"选盘支持盘符"的入口（见 Settings.btnAddByDrive_Click）
+            txtDriveLetters.Location = new Point(58, 74);
+            txtDriveLetters.Name = "txtDriveLetters";
+            txtDriveLetters.Size = new Size(90, 23);
+            txtDriveLetters.TabIndex = 3;
+            // 
+            // btnAddByDrive
+            // 
+            btnAddByDrive.Location = new Point(152, 73);
+            btnAddByDrive.Name = "btnAddByDrive";
+            btnAddByDrive.Size = new Size(85, 27);
+            btnAddByDrive.TabIndex = 4;
+            btnAddByDrive.Text = "按盘符添加";
+            btnAddByDrive.UseVisualStyleBackColor = true;
+            btnAddByDrive.Click += btnAddByDrive_Click;
+            // 
+            // btnPickStartupDisks
+            // 
+            btnPickStartupDisks.Location = new Point(243, 73);
+            btnPickStartupDisks.Name = "btnPickStartupDisks";
+            btnPickStartupDisks.Size = new Size(95, 27);
+            btnPickStartupDisks.TabIndex = 5;
+            btnPickStartupDisks.Text = "选择硬盘…";
+            btnPickStartupDisks.UseVisualStyleBackColor = true;
+            btnPickStartupDisks.Click += btnPickStartupDisks_Click;
+            // 
+            // lblStartupDisks
+            // 
+            // 已选目标盘的摘要（含当前盘符，由 Settings.RefreshStartupDiskSummary 动态生成）
+            lblStartupDisks.AutoSize = false;
+            lblStartupDisks.ForeColor = SystemColors.GrayText;
+            lblStartupDisks.Location = new Point(15, 106);
+            lblStartupDisks.Name = "lblStartupDisks";
+            lblStartupDisks.Size = new Size(360, 36);
+            lblStartupDisks.TabIndex = 6;
+            lblStartupDisks.TextAlign = ContentAlignment.TopLeft;
             // 
             // groupBoxSsd
             // 
@@ -341,7 +435,8 @@ namespace FlyDisk
             // 
             AutoScaleDimensions = new SizeF(7F, 17F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(430, 660);
+            ClientSize = new Size(430, 820);
+            Controls.Add(groupBoxStartup);
             Controls.Add(groupBoxSsd);
             Controls.Add(groupBoxCache);
             Controls.Add(groupBoxDisk);
@@ -366,6 +461,8 @@ namespace FlyDisk
             groupBoxCache.PerformLayout();
             groupBoxSsd.ResumeLayout(false);
             groupBoxSsd.PerformLayout();
+            groupBoxStartup.ResumeLayout(false);
+            groupBoxStartup.PerformLayout();
             ResumeLayout(false);
         }
 
@@ -395,5 +492,13 @@ namespace FlyDisk
         private Label lblSsdConservativeVal;
         private Button btnL2Manage;
         private Label lblMemEstimate;
+        private GroupBox groupBoxStartup;
+        private CheckBox chkRunAtStartup;
+        private CheckBox chkKeepOfflineOnBoot;
+        private Label lblDriveLetters;
+        private TextBox txtDriveLetters;
+        private Button btnAddByDrive;
+        private Button btnPickStartupDisks;
+        private Label lblStartupDisks;
     }
 }
