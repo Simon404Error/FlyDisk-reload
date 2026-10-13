@@ -1,6 +1,6 @@
-# FlyDisk（个人修改版）
+# FlyDisk 硬盘加速器，让硬盘飞起来！ ！
 
-> 上游项目：[youke1686/FlyDisk](https://github.com/youke1686/FlyDisk)。本仓库是它的**个人 fork**，用于自用改进与试验，
+> 上游项目：[youke1686/FlyDisk](https://github.com/youke1686/FlyDisk)
 > 修改点见下；上游功能说明与跑分实测请看上游 README。
 
 Windows 机械硬盘块级缓存加速器：点「启动加速」后，程序把目标 HDD **整盘脱机 + 独占打开**，
