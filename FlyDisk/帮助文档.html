@@ -590,6 +590,7 @@
 <pre><code>磁盘 0（C: , D:）    型号字样    （容量）</code></pre>
 <p>括号里是该盘上的<strong>盘符</strong>（一块盘可能对应多个卷、多个盘符，用英文逗号分隔）；脱机的盘通常是由于你加速过，没有盘符，那一格显示「<em>脱机</em>」。</p>
 <p>目前仅能同时加速一整块物理硬盘，不单卷加速 。</p>
+<p><strong>可以一次选多块盘</strong>：按住 <kbd>Ctrl</kbd> / <kbd>Shift</kbd> 点选（或拖动框选），确定后这些盘会<strong>同时</strong>被加速——每块盘各用各的 iSCSI 端口（从配置端口开始依次递增）与各自的目标名，互不干扰；哪块失败不影响其它块，日志会汇总"成功 N/M"。多盘时主按钮变成「停止加速（全部 N 块）」一键收尾；<strong>L2 二级缓存只作用于第一块盘</strong>（其余盘只用 L1 内存缓存 + 写透传），因为一份 L2 容器只能属于一块盘。</p>
 <h3>盘信息区</h3>
 <p>选中一行后，下方会显示：</p>
 <ul>
@@ -622,6 +623,15 @@
 <li><strong>保守线（L2 缓存占用率）</strong>：默认 <code>80%</code>，范围 50–99%。L2 占用率超过它后缓存接收策略转为保守。</li>
 </ul>
 <p><strong>预计额外内存</strong>：有些缓存以外的必要内存开销会随着缓存增多而增大，窗口底部会给出估算，请对照内存余量合理决策。</p>
+<h3 id="set-startup-zh">开机与自动化</h3>
+<ul>
+    <li><strong>登录后自动启动本程序</strong>：默认<strong>关闭</strong>。开启后程序会创建一个计划任务，在<strong>你登录 Windows 时</strong>以最高权限启动本程序——不会弹 UAC（这正是它不用「启动」文件夹 / 注册表自启的原因，那种方式对管理员程序每次开机都要弹一次）。</li>
+    <li><strong>开机（含未登录）把下列硬盘保持脱机</strong>：默认<strong>关闭</strong>。开启后会再创建一个<strong>开机触发</strong>的计划任务：系统启动约 1 分钟后把这批硬盘整盘脱机，然后立即退出（<strong>不需要你登录</strong>）。此后这些盘在系统里看不到、也不会被其它程序占用，直到你在主界面点「启动加速」把它们接管回来。</li>
+    <li><strong>目标盘怎么选</strong>：点「<strong>选择硬盘…</strong>」在列表里勾选（可多选）；也可以直接把盘符敲进输入框（如 <code>Y,Z</code>）后点「<strong>按盘符添加</strong>」。列表按<strong>设备身份</strong>（型号 + 序列号）保存，所以<strong>换盘符、换接口都不影响</strong>。</li>
+    <p class="tip">&nbsp;盘已脱机时<strong>没有盘符</strong>（整盘脱机后卷会消失），这种情形请用「选择硬盘…」；「按盘符添加」只在你此刻还能看到盘符（盘处于联机状态）时可用。</p>
+    <li><strong>系统盘 / 本程序所在盘 / 分页文件所在盘永远不能作为目标盘</strong>：把它们整盘脱机分别会让 Windows 失去系统盘、让本程序自己消失、让内核换页失败而蓝屏。选择时会被标红拦住，开机流程同样不会碰它们。</li>
+</ul>
+<p><strong>本程序不做「运行期盯守」</strong>：它只保证「开机那一刻这些盘是脱机的」；如果你之后在「磁盘管理」里手动把盘联机，程序不会再自动把它脱机。</p>
 <h2 id="inspector-zh">检查器</h2>
 <p>菜单「<strong>检查器</strong>」打开，用来观察当前运行状态、统计数据，以便确定加速有没有效果。顶部有两个页签：</p>
 
@@ -980,6 +990,7 @@
 <pre><code>Disk 0 (C: , D:)    Model    (Capacity)</code></pre>
 <p>The parentheses hold the <strong>drive letters</strong> on that disk (a disk may map to several volumes and letters, separated by English commas). An offline disk usually means you accelerated it before, so it has no letters and that slot shows "<em>offline</em>".</p>
 <p>For now you can accelerate only a whole physical disk at once; per-volume acceleration is not supported.</p>
+<p><strong>You can select several disks at once</strong>: use <kbd>Ctrl</kbd> / <kbd>Shift</kbd> click (or drag a selection box), and after confirming they are accelerated <strong>simultaneously</strong> — each disk gets its own iSCSI port (incrementing from the configured port) and its own target name, so they do not interfere. One disk failing does not affect the others, and the log summarises "N/M succeeded". With multiple disks the main button becomes "Stop acceleration (all N)" for one-shot teardown. <strong>L2 caching applies to the first disk only</strong> (the rest use L1 + write-through), because one L2 container can belong to a single disk.</p>
 
 <h3>Disk info area</h3>
 <p>After selecting a row, the area below shows:</p>
@@ -1014,6 +1025,15 @@
 </ul>
 <p><strong>Estimated extra memory</strong>: some necessary memory overhead beyond the cache itself grows as the cache grows; the bottom of the window gives an estimate — decide the budget sensibly against your free memory.</p>
 
+<h3 id="set-startup-en">Startup &amp; Automation</h3>
+<ul>
+    <li><strong>Start FlyDisk at logon</strong>: off by default. When enabled, FlyDisk creates a scheduled task that starts the program with highest privileges <strong>when you log on to Windows</strong> — no UAC prompt (this is exactly why it does not use the Startup folder or the registry Run key: for an administrator program those would trigger a UAC prompt at every boot).</li>
+    <li><strong>Keep the disks below offline at boot (even before logon)</strong>: off by default. When enabled, a second <strong>boot-triggered</strong> scheduled task takes those disks entirely offline about one minute after Windows starts and then exits immediately (<strong>no logon required</strong>). From then on the disks are invisible to the system and cannot be occupied by other programs, until you click "Start Acceleration" in the main window to take them over.</li>
+    <li><strong>Choosing target disks</strong>: click "<strong>Choose disks…</strong>" and tick as many as you like; or type drive letters (e.g. <code>Y,Z</code>) and click "<strong>Add by letter</strong>". The list is stored by <strong>device identity</strong> (model + serial), so changing drive letters or ports does not matter.</li>
+    <p class="tip">&nbsp;An offline disk <strong>has no drive letter</strong> (offlining removes its volumes), so use "Choose disks…" in that case; "Add by letter" only works while the disk is online and still shows a letter.</p>
+    <li><strong>The system disk, the disk holding the program, and the page-file disk can never be targets</strong>: taking them offline would respectively remove the Windows system disk, remove FlyDisk itself, or make the kernel fail to page out (blue screen). They are flagged in red during selection, and the boot steps never touch them.</li>
+</ul>
+<p><strong>No runtime watchdog</strong>: FlyDisk only guarantees those disks are offline <em>at boot</em>; if you later bring a disk online in Disk Management, it will not force it offline again.</p>
 <h2 id="inspector-en">Inspector</h2>
 <p>Open it from the "<strong>Inspector</strong>" menu to watch the current run state and statistics, so you can tell whether acceleration is doing its job. There are two tabs at the top:</p>
 

@@ -47,6 +47,7 @@ namespace FlyDisk
         {
             btnStartStop = new Button();
             txtLog = new TextBox();
+            btnClearLog = new Button();
             statusStrip1 = new StatusStrip();
             lblTargetStatus = new ToolStripStatusLabel();
             menuStrip1 = new MenuStrip();
@@ -54,16 +55,14 @@ namespace FlyDisk
             检查器ToolStripMenuItem = new ToolStripMenuItem();
             labelTitle = new Label();
             labelSubtitle = new Label();
-            lblStarHint = new Label();
-            lblBadgePlaceholder = new Label();
-            picGitHub = new PictureBox();
             statusStrip1.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)picGitHub).BeginInit();
             menuStrip1.SuspendLayout();
             SuspendLayout();
             // 
             // btnStartStop
             // 
+            // 窗口可以自由拖动大小（见 Form1.LayoutDynamic）：宽度跟着窗口变、纵向位置由顶部定住
+            btnStartStop.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             btnStartStop.Location = new Point(12, 141);
             btnStartStop.Name = "btnStartStop";
             btnStartStop.Size = new Size(560, 50);
@@ -74,6 +73,7 @@ namespace FlyDisk
             // 
             // txtLog
             // 
+            txtLog.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             txtLog.BackColor = Color.White;
             txtLog.ForeColor = Color.Black;
             txtLog.Location = new Point(12, 197);
@@ -81,8 +81,22 @@ namespace FlyDisk
             txtLog.Name = "txtLog";
             txtLog.ReadOnly = true;
             txtLog.ScrollBars = ScrollBars.Vertical;
-            txtLog.Size = new Size(560, 143);
+            // 高度是**算出来的**（见 Form1.LayoutDynamic）：从顶部一直撑到"清空日志按钮行 + 状态栏"之上，
+            // 于是日志框底部贴近软件底端；这里只是设计期的初值，运行时每次尺寸变化都会重算。
+            txtLog.Size = new Size(560, 195);
             txtLog.TabIndex = 2;
+            // 
+            // btnClearLog
+            // 
+            // 贴在日志框右下角、状态栏之上（位置与大小见 Form1.LayoutDynamic）
+            btnClearLog.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            btnClearLog.Location = new Point(488, 398);
+            btnClearLog.Name = "btnClearLog";
+            btnClearLog.Size = new Size(84, 26);
+            btnClearLog.TabIndex = 3;
+            btnClearLog.Text = "清空日志";
+            btnClearLog.UseVisualStyleBackColor = true;
+            btnClearLog.Click += btnClearLog_Click;
             // 
             // statusStrip1
             // 
@@ -122,6 +136,8 @@ namespace FlyDisk
             // 
             // labelTitle
             // 
+            // 标题：宽度跟着窗口变（文字居中），窗口拉宽时标题仍在正中
+            labelTitle.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             labelTitle.Font = new Font("Microsoft YaHei UI", 14.25F, FontStyle.Regular, GraphicsUnit.Point, 134);
             labelTitle.Location = new Point(0, 40);
             labelTitle.Name = "labelTitle";
@@ -134,66 +150,33 @@ namespace FlyDisk
             // 
             labelSubtitle.AutoSize = true;
             labelSubtitle.ForeColor = Color.Gray;
+            // 位置由 Form1.LayoutDynamic/PlaceSubtitle 按当前窗口宽度算（左边缘贴在标题的水平中线上）
             labelSubtitle.Location = new Point(292, 92);
             labelSubtitle.Name = "labelSubtitle";
             labelSubtitle.Size = new Size(146, 17);
             labelSubtitle.TabIndex = 6;
             labelSubtitle.Text = "—— 机械硬盘块级加速器";
             // 
-            // lblStarHint
-            // 
-            lblStarHint.AutoSize = true;
-            // 灰色 ⇒ 主题层按「次要文字」上色（见 ThemeManager.ResolveRole），深浅色下都是柔和的提示色。
-            lblStarHint.Cursor = Cursors.Hand;
-            lblStarHint.ForeColor = Color.Gray;
-            lblStarHint.Name = "lblStarHint";
-            lblStarHint.Text = "如果解决了你的问题，就随手给一颗star支持一下吧 →";
-            // 它本身就是"进仓库"的入口（点了同样开浏览器）：即使徽标图下不到，右下角也始终点得动。
-            lblStarHint.Click += OpenGitHubRepo;
-            // 位置跟着徽标走（见 Form1.PlaceBadgeRow）
-            lblStarHint.Visible = false;
-            // 
-            // lblBadgePlaceholder
-            // 
-            lblBadgePlaceholder.AutoSize = true;
-            // 这就是那个"按钮"的默认文字：卡片（徽标图）读到之前顶在卡片的位置上，读到就换成卡片。
-            // 与提示同为灰色，主题层会按「次要文字」上色。
-            lblBadgePlaceholder.Cursor = Cursors.Hand;
-            lblBadgePlaceholder.ForeColor = Color.Gray;
-            lblBadgePlaceholder.Name = "lblBadgePlaceholder";
-            lblBadgePlaceholder.Text = "（点击前往）";
-            lblBadgePlaceholder.Click += OpenGitHubRepo;
-            lblBadgePlaceholder.Visible = false;
-            // 
-            // picGitHub
-            // 
-            picGitHub.Cursor = Cursors.Hand;
-            picGitHub.Name = "picGitHub";
-            picGitHub.SizeMode = PictureBoxSizeMode.AutoSize;
-            picGitHub.TabStop = false;
-            // 图片是**运行时**从 shields.io 下的（见 Form1.LoadGitHubBadge）：下到之前先藏着，
-            // 免得先闪一个空框；尺寸也要等拿到图才知道，位置在图片就位后由 PlaceBadgeRow 算。
-            picGitHub.Visible = false;
-            picGitHub.Click += OpenGitHubRepo;
-            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(7F, 17F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(584, 402);
+            // 默认比原来更高：多出来的高度全部给日志框（见 Form1.LayoutDynamic），其底部贴近软件底端
+            ClientSize = new Size(584, 470);
             Controls.Add(labelSubtitle);
             Controls.Add(labelTitle);
             Controls.Add(statusStrip1);
             Controls.Add(menuStrip1);
             Controls.Add(txtLog);
+            Controls.Add(btnClearLog);
             Controls.Add(btnStartStop);
-            Controls.Add(picGitHub);
-            Controls.Add(lblBadgePlaceholder);
-            Controls.Add(lblStarHint);
             ForeColor = SystemColors.ControlText;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
+            // Sizable：允许用户拖动改变窗口大小（布局由 Form1.LayoutDynamic 自适应）
+            FormBorderStyle = FormBorderStyle.Sizable;
             MainMenuStrip = menuStrip1;
-            MaximizeBox = false;
+            MaximizeBox = true;
+            // 下限要保证标题、主按钮、日志框、清空按钮与状态栏都还放得下（含边框，故比 ClientSize 大一圈）
+            MinimumSize = new Size(520, 460);
             Name = "Form1";
             StartPosition = FormStartPosition.CenterScreen;
             Text = "FlyDisk - 机械硬盘加速器";
@@ -202,7 +185,6 @@ namespace FlyDisk
             statusStrip1.PerformLayout();
             menuStrip1.ResumeLayout(false);
             menuStrip1.PerformLayout();
-            ((System.ComponentModel.ISupportInitialize)picGitHub).EndInit();
             ResumeLayout(false);
             PerformLayout();
         }
@@ -211,6 +193,7 @@ namespace FlyDisk
 
         private System.Windows.Forms.Button btnStartStop;
         private System.Windows.Forms.TextBox txtLog;
+        private System.Windows.Forms.Button btnClearLog;
         private System.Windows.Forms.StatusStrip statusStrip1;
         private System.Windows.Forms.ToolStripStatusLabel lblTargetStatus;
         private MenuStrip menuStrip1;
@@ -218,8 +201,5 @@ namespace FlyDisk
         private ToolStripMenuItem 检查器ToolStripMenuItem;
         private Label labelTitle;
         private Label labelSubtitle;
-        private Label lblStarHint;
-        private Label lblBadgePlaceholder;
-        private System.Windows.Forms.PictureBox picGitHub;
     }
 }

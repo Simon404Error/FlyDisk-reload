@@ -19,6 +19,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using FlyDisk.Engine;
 using FlyDisk.Localization;
@@ -63,6 +64,12 @@ namespace FlyDisk
             Bind("settings.ssdSize", lblSsdSize);
             Bind("settings.ssdConservative", lblSsdConservative);
             Bind("settings.l2Manage", btnL2Manage);
+            Bind("settings.groupStartup", groupBoxStartup);
+            Bind("settings.runAtStartup", chkRunAtStartup);
+            Bind("settings.keepOfflineOnBoot", chkKeepOfflineOnBoot);
+            Bind("settings.driveLetters", lblDriveLetters);
+            Bind("settings.addByDrive", btnAddByDrive);
+            Bind("settings.pickDisks", btnPickStartupDisks);
 
             LocalizationManager.Apply(this);
         }
@@ -95,6 +102,12 @@ namespace FlyDisk
             trackStop.Value = (int)(_config.StopCachingThreshold * 100);
 
             LoadSsdSettings();
+
+            // 开机与自动化（见 AGENTS.md §2.7）：开关 + 已选目标盘的摘要
+            chkRunAtStartup.Checked = _config.RunAtStartup;
+            chkKeepOfflineOnBoot.Checked = _config.KeepOfflineOnBoot;
+            RefreshStartupDiskSummary();
+
             UpdateValueLabels();
             UpdateMemoryEstimate();
         }
@@ -292,8 +305,196 @@ namespace FlyDisk
             _config.SsdCacheMaxBytes = (long)numSsdCacheGb.Value * 1024 * 1024 * 1024;
             _config.SsdConservativeThreshold = trackSsdConservative.Value / 100.0;
 
+            // 开机与自动化：勾了「保持脱机」却一块盘都没选 ⇒ 那条计划任务会空跑，先拦住
+            if (chkKeepOfflineOnBoot.Checked && _config.StartupDiskIdentities.Count == 0)
+            {
+                MessageBox.Show(Locale.T("settings.msg.keepOfflineNoDisk"), Locale.T("dialog.tip"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            _config.RunAtStartup = chkRunAtStartup.Checked;
+            _config.KeepOfflineOnBoot = chkKeepOfflineOnBoot.Checked;
+
             DialogResult = DialogResult.OK;
             Close();
         }
+
+        #region 开机与自动化
+
+        /// <summary>
+        /// 「选择硬盘…」：**多选**本机物理盘（见 PickerForm 的多选构造），结果写入配置里的**开机目标盘**列表。
+        /// 打开时按当前列表自动勾选，确定即覆盖、取消则什么都不改（与设置窗其余项一致：取消不落盘）。
+        ///
+        /// 这些盘会被两条开机流程用到：① 开机（含未登录）时确保脱机；② 登录后启动主界面。
+        /// 它们**不是**"自动加速名单"——加速仍然由用户在主界面点「启动加速」时**当场选盘**
+        /// （见 PickerForm 类注释的"选盘时机"），这里存的只是"开机要处理哪几块"。
+        /// </summary>
+        private void btnPickStartupDisks_Click(object? sender, EventArgs e)
+        {
+            List<PhysicalDiskInfo> disks;
+            try
+            {
+                disks = PhysicalDiskHandle.Enumerate();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(Locale.T("settings.msg.enumerateFailed", ex.Message), Locale.T("dialog.error"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (disks.Count == 0)
+            {
+                MessageBox.Show(Locale.T("settings.msg.noDisks"), Locale.T("dialog.tip"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            using var picker = new PickerForm(disks, _config.StartupDiskIdentities,
+                PhysicalDiskHandle.GetL2CacheDiskNumber(_config.EnableSsdCache, _config.SsdCachePath));
+            if (picker.ShowDialog(this) != DialogResult.OK) return;
+
+            _config.StartupDiskIdentities.Clear();
+            foreach (PhysicalDiskInfo disk in picker.SelectedDisks)
+            {
+                _config.StartupDiskIdentities.Add(PhysicalDiskHandle.DescribeIdentity(disk));
+            }
+            RefreshStartupDiskSummary();
+        }
+
+        /// <summary>
+        /// 「按盘符添加」：把输入里的盘符（`Y,Z` / `Y: Z:` / `Y:\` 都认）解析成物理盘并**追加**到开机目标盘列表。
+        ///
+        /// **为什么盘符只能用来"添加"、不能用来"保存"**：盘符属于**卷**、不是物理盘——一块盘可以多卷多盘符、
+        /// 也可以（未格式化时）没有盘符；而且本程序对目标盘做的是**整盘脱机**，脱机后卷随之消失、盘符根本不存在。
+        /// 开机时目标盘恰恰就是"已脱机"的状态，所以最终存下来的必须是**设备身份串**（型号|序列号），
+        /// 盘符只在"此刻盘还联机"时充当解析入口（见 <see cref="DiskConfig.StartupDiskIdentities"/>）。
+        /// </summary>
+        private void btnAddByDrive_Click(object? sender, EventArgs e)
+        {
+            List<string> letters = ParseDriveLetters(txtDriveLetters.Text);
+            if (letters.Count == 0)
+            {
+                MessageBox.Show(Locale.T("settings.msg.noDriveLetter"), Locale.T("dialog.tip"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            List<PhysicalDiskInfo> disks;
+            try
+            {
+                disks = PhysicalDiskHandle.Enumerate();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(Locale.T("settings.msg.enumerateFailed", ex.Message), Locale.T("dialog.error"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            var added = new List<string>();
+            var problems = new List<string>();
+            foreach (string letter in letters)
+            {
+                if (!PhysicalDiskHandle.TryGetDiskNumberOfVolume(letter, out int number))
+                {
+                    // 脱机盘没有盘符——这正是"用盘符找不到它"的根源，如实说明并指路「选择硬盘…」
+                    problems.Add(Locale.T("settings.drive.notFound", letter));
+                    continue;
+                }
+
+                PhysicalDiskInfo? info = disks.FirstOrDefault(d => d.DiskNumber == number);
+                if (info == null)
+                {
+                    problems.Add(Locale.T("settings.drive.notFound", letter));
+                    continue;
+                }
+
+                string blocked = PhysicalDiskHandle.DescribeTargetDiskBlockReason(info.DiskNumber);
+                if (blocked.Length > 0)
+                {
+                    // 与选盘对话框 / 引擎启动校验同一条硬拦：这些盘做不了加速目标，也绝不能脱机
+                    problems.Add(Locale.T("settings.drive.blocked", letter, blocked));
+                    continue;
+                }
+
+                string identity = PhysicalDiskHandle.DescribeIdentity(info);
+                if (_config.StartupDiskIdentities.Contains(identity)) continue;   // 已在列表里：跳过（幂等）
+
+                _config.StartupDiskIdentities.Add(identity);
+                added.Add(DescribeDiskForUi(info));
+            }
+
+            txtDriveLetters.Clear();
+            RefreshStartupDiskSummary();
+
+            if (problems.Count > 0)
+            {
+                MessageBox.Show(string.Join(Environment.NewLine, problems), Locale.T("dialog.tip"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            else if (added.Count > 0)
+            {
+                MessageBox.Show(Locale.T("settings.msg.disksAdded", string.Join("；", added)),
+                    Locale.T("dialog.tip"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+
+        /// <summary>从自由文本里抽出盘符（只认字母，忽略冒号/反斜杠/逗号/空格），按出现顺序去重</summary>
+        private static List<string> ParseDriveLetters(string text)
+        {
+            var letters = new List<string>();
+            foreach (Match match in Regex.Matches(text ?? string.Empty, "[A-Za-z]"))
+            {
+                string letter = match.Value.ToUpperInvariant() + ":";
+                if (!letters.Contains(letter)) letters.Add(letter);
+            }
+            return letters;
+        }
+
+        /// <summary>把已选目标盘刷成一行摘要（**当前盘符 + 型号**；盘找不到时如实标出）</summary>
+        private void RefreshStartupDiskSummary()
+        {
+            if (_config.StartupDiskIdentities.Count == 0)
+            {
+                lblStartupDisks.Text = Locale.T("settings.startupNone");
+                return;
+            }
+
+            var parts = new List<string>();
+            try
+            {
+                List<PhysicalDiskInfo> disks = PhysicalDiskHandle.Enumerate();
+                foreach (string identity in _config.StartupDiskIdentities)
+                {
+                    int number = PhysicalDiskHandle.ResolveDiskNumber(disks, identity);
+                    PhysicalDiskInfo? info = number >= 0 ? disks.FirstOrDefault(d => d.DiskNumber == number) : null;
+                    parts.Add(info != null ? DescribeDiskForUi(info) : Locale.T("settings.startupMissing", identity));
+                }
+            }
+            catch
+            {
+                // 枚举失败（例如盘正在被独占）：退化成只列身份串，不能因为一句提示挂掉设置窗口
+                parts.AddRange(_config.StartupDiskIdentities);
+            }
+
+            lblStartupDisks.Text = Locale.T("settings.startupSelected", string.Join("；", parts));
+        }
+
+        /// <summary>展示用：「Y:、Z:（型号）」；盘当前没有盘符（已脱机 / 未格式化）时用文案说明</summary>
+        private static string DescribeDiskForUi(PhysicalDiskInfo info)
+        {
+            string drives = info.DriveLetters.Count > 0
+                ? string.Join("、", info.DriveLetters)
+                : Locale.T("settings.drive.none");
+            string model = info.Model.Length > 0 ? info.Model : Locale.T("selectDisk.modelUnknown");
+            return $"{drives}（{model}）";
+        }
+
+        /// <summary>勾选开关时把摘要刷一遍（只是如实显示当前选择，不做任何拦截）</summary>
+        private void chkKeepOffline_CheckedChanged(object? sender, EventArgs e) => RefreshStartupDiskSummary();
+
+        #endregion
     }
 }

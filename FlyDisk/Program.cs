@@ -63,8 +63,17 @@ namespace FlyDisk
         ///  The main entry point for the application.
         /// </summary>
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
+            // 【开机保持脱机】专用分支：由计划任务以 SYSTEM 在**无人登录**时拉起（见 StartupService）。
+            // 它只把配置里选中的盘确保为脱机，然后立刻退出——**刻意不建任何界面**：
+            // SYSTEM 会话没有交互桌面，窗口在那里没人看得见，建了反而是错误信号（用户看到的是"程序没启动"）。
+            if (HasKeepOfflineSwitch(args))
+            {
+                Environment.ExitCode = RunKeepOfflineOnly();
+                return;
+            }
+
             // 单实例：已经有本程序在跑（**不管它是哪个路径下的 exe**）⇒ 请它把主窗口叫到前台，
             // 本进程什么都不做直接退出。放在所有初始化之前——第二个实例不该碰配置、日志或任何盘。
             using var singleInstance = new Mutex(initiallyOwned: false, SingleInstanceMutexName, out bool createdNew);
@@ -128,6 +137,43 @@ namespace FlyDisk
             AppDomain.CurrentDomain.UnhandledException += (s, e) => ReportCrash(e.ExceptionObject as Exception);
 
             Application.Run(new Form1());
+        }
+
+        /// <summary>命令行是否带「只做保持脱机」开关（见 <see cref="StartupService.KeepOfflineOnlySwitch"/>）</summary>
+        private static bool HasKeepOfflineSwitch(string[] args)
+        {
+            foreach (string arg in args)
+            {
+                if (string.Equals(arg, StartupService.KeepOfflineOnlySwitch, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 【开机保持脱机】入口：读配置 → 逐盘确保脱机 → 落诊断日志 → 用退出码表达结果。
+        ///
+        /// 由计划任务以 SYSTEM 启动，**没有任何界面**，所以过程信息全部进 `debug-security.log`
+        /// （退出码只作为计划任务"上次运行结果"的痕迹，用户不需要去看）。
+        /// 这里**绝不外抛**：计划任务拉起的进程崩掉只会留下一个没人解释的错误码。
+        /// </summary>
+        private static int RunKeepOfflineOnly()
+        {
+            try
+            {
+                LogService.DebugFileSession("开机保持脱机（--keep-offline-only）");
+                DiskConfig config = ConfigService.Load();
+                Locale.SetLanguage(config.Language);
+
+                List<string> lines = BootDiskPreparation.Prepare(config, out bool anyFailed);
+                foreach (string line in lines) LogService.DebugFile("  " + line);
+                return anyFailed ? 1 : 0;
+            }
+            catch (Exception ex)
+            {
+                LogService.DebugFile($"开机保持脱机失败（已忽略，不影响开机）：{ex}");
+                return 1;
+            }
         }
 
         private static void ReportCrash(Exception? ex)

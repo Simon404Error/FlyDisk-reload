@@ -21,6 +21,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using DiskAccessLibrary.Win32;
 using FlyDisk.Localization;
 using Microsoft.Win32;
@@ -158,7 +159,7 @@ namespace FlyDisk.Engine
             if (diskNumber < 0)
                 throw new ArgumentOutOfRangeException(nameof(diskNumber), Locale.T("engine.disk.badDiskNumber"));
 
-            using SafeFileHandle probe = CreateDiskHandle(diskNumber, FileAccess.Read, FileShare.ReadWrite);
+            using SafeFileHandle probe = CreateProbeHandle(diskNumber);
             if (probe.IsInvalid)
                 throw new IOException(Locale.T("engine.disk.probeFailed", diskNumber, LastErrorText()));
 
@@ -188,31 +189,44 @@ namespace FlyDisk.Engine
 
             if (wasOnline)
             {
-                using SafeFileHandle probe = CreateDiskHandle(diskNumber, FileAccess.ReadWrite, FileShare.Read);
+                using SafeFileHandle probe = CreateAttributeHandle(diskNumber);
                 if (probe.IsInvalid)
                     throw new IOException(Locale.T("engine.disk.offlineNoWriteAccess", diskNumber, LastErrorText()));
 
                 // persist = true：脱机属性必须**持久化**。否则重启后盘就自己回来了，
                 // "程序没运行时没人写过它"这条判据不成立，跨重启的 L2 缓存也就无从谈起（见类注释）。
-                if (!PhysicalDiskControl.SetOnlineStatus(probe, online: false, persist: true))
+                if (!OfflineForTakeover(probe))
                     throw new IOException(Locale.T("engine.disk.offlineFailed", diskNumber));
+
+                // 脱机是**异步生效**的：卷要退场、partmgr 要重新枚举设备——立刻去独占打开，常常直接撞
+                // ERROR_SHARING_VIOLATION(32)（现象就是"无法独占打开"）。这里先静默一小会儿再试。
+                Thread.Sleep(OfflineSettleMs);
             }
 
-            SafeFileHandle handle = CreateDiskHandle(diskNumber, FileAccess.ReadWrite, FileShare.None, writeThrough: true);
-            if (handle.IsInvalid)
+            SafeFileHandle? exclusive = TryOpenExclusive(diskNumber, out int exclusiveError);
+            SafeFileHandle handle;
+            if (exclusive != null)
             {
-                // 退一步：只阻止别人写入。脱机已经让卷退场、数据本就拿不到，这里只是再上一道保险。
-                int exclusiveError = Marshal.GetLastWin32Error();
-                handle = CreateDiskHandle(diskNumber, FileAccess.ReadWrite, FileShare.Read, writeThrough: true);
+                handle = exclusive;
+            }
+            else
+            {
+                // 退一步：拿不到独占就退化为**宽松共享**打开（别人的写访问也允许），先把盘接管下来。
+                // 为什么共享模式必须"允许写"：只要还有进程以写方式打开着这块盘，任何"不允许写"的打开请求
+                // 都会被 Windows 直接拒掉（ERROR_SHARING_VIOLATION），我们就永远进不去（见 CreateAttributeHandle 的注释）。
+                // 数据安全仍由**脱机**这条保证：盘脱机后卷已退场，别的程序拿不到它的文件系统。
+                handle = CreateDiskHandle(diskNumber, FileAccess.ReadWrite, FallbackShare, writeThrough: true);
                 if (handle.IsInvalid)
                 {
-                    // 独占失败就不要把盘留在"看不见"的状态里：恢复成我们打开它之前的样子
+                    // 连宽松共享都打不开（真有程序独占着它）就不要把盘留在"看不见"的状态里：
+                    // 恢复成我们打开它之前的样子
                     if (wasOnline) SetOnlineBestEffort(diskNumber);
                     throw new IOException(
                         Locale.T("engine.disk.exclusiveOpenFailed", diskNumber, exclusiveError));
                 }
-                LogService.DebugFile($"磁盘 {diskNumber} 未能取得独占句柄（错误 {exclusiveError}），已退化为共享读打开；" +
-                                     "该盘已脱机，数据仍不会被其他程序访问");
+                LogService.DebugFile($"磁盘 {diskNumber} 未能取得独占句柄（错误 {exclusiveError}，已重试 {ExclusiveOpenAttempts} 次），" +
+                                     "已退化为宽松共享打开；该盘已脱机，数据仍不会被其他程序通过文件系统访问，" +
+                                     "但若有别的程序也直接读写这块物理盘，双方数据可能互相覆盖");
             }
 
             LogService.DebugFile($"磁盘 {diskNumber} 已脱机并打开（原状态：{(wasOnline ? "联机" : "脱机（接管）")}，" +
@@ -236,16 +250,19 @@ namespace FlyDisk.Engine
 
             if (wasOnline)
             {
-                using SafeFileHandle probe = CreateDiskHandle(diskNumber, FileAccess.ReadWrite, FileShare.Read);
+                using SafeFileHandle probe = CreateAttributeHandle(diskNumber);
                 if (probe.IsInvalid)
                     throw new IOException(Locale.T("engine.disk.offlineNoWriteAccess", diskNumber, LastErrorText()));
 
                 // 与 Open 同口径：脱机属性必须持久化，否则重启后盘自己回来，"没人写过它"这条判据不成立
-                if (!PhysicalDiskControl.SetOnlineStatus(probe, online: false, persist: true))
+                if (!OfflineForTakeover(probe))
                     throw new IOException(Locale.T("engine.disk.offlineFailed", diskNumber));
+
+                // 同 Open：脱机是异步生效的，等卷退场再打开（否则轻则共享冲突、重则读到半退场状态）
+                Thread.Sleep(OfflineSettleMs);
             }
 
-            SafeFileHandle handle = CreateDiskHandle(diskNumber, FileAccess.Read, FileShare.Read);
+            SafeFileHandle handle = CreateDiskHandle(diskNumber, FileAccess.Read, FallbackShare);
             if (handle.IsInvalid)
             {
                 // 打不开就不要把盘留在"看不见"的状态里：恢复成我们打开它之前的样子
@@ -299,7 +316,7 @@ namespace FlyDisk.Engine
         {
             try
             {
-                using SafeFileHandle probe = CreateDiskHandle(diskNumber, FileAccess.ReadWrite, FileShare.Read);
+                using SafeFileHandle probe = CreateAttributeHandle(diskNumber);
                 if (probe.IsInvalid)
                 {
                     error = Locale.T("engine.online.openFailed", diskNumber, LastErrorText());
@@ -340,6 +357,86 @@ namespace FlyDisk.Engine
                 LogService.DebugFile($"磁盘 {diskNumber} 联机失败（可用磁盘管理手动联机）：{error}");
             }
         }
+
+        /// <summary>
+        /// 把该盘**整盘脱机**（等价于「磁盘管理 → 脱机」/ `diskpart offline disk`），**不开独占句柄**。
+        ///
+        /// 与 <see cref="Open"/> 的区别：只做脱机这一步、随即关句柄；因为脱机属性是 <c>persist = true</c>
+        /// 写进系统的，**进程退出后盘仍然保持脱机**——这正是「开机保持脱机」能由一个短命进程完成的原因。
+        /// 幂等：盘本来就是脱机时直接返回成功（<c>SetOnlineStatus</c> 内部先查当前状态）。
+        ///
+        /// 调用前提（由调用方保证，见 <c>BootDiskPreparation</c>）：**必须**先过
+        /// <see cref="DescribeTargetDiskBlockReason"/>——脱机系统盘 / 本程序所在盘 / 分页文件所在盘
+        /// 分别会把 Windows 送走、把本程序送走、让内核换页失败而**当场蓝屏**（0x7A）。
+        /// </summary>
+        /// <returns>成功 <c>true</c>；失败 <c>false</c> 且 <paramref name="error"/> 给出可读原因（不抛）</returns>
+        public static bool TryOffline(int diskNumber, out string error)
+        {
+            error = string.Empty;
+            try
+            {
+                // 脱机是"改磁盘属性"，要写权限的句柄；不需要独占（此刻卷还在，别人也开着它）
+                using SafeFileHandle probe = CreateAttributeHandle(diskNumber);
+                if (probe.IsInvalid)
+                {
+                    error = Locale.T("engine.disk.offlineNoWriteAccess", diskNumber, LastErrorText());
+                    return false;
+                }
+
+                if (!OfflineForTakeover(probe))
+                {
+                    error = Locale.T("engine.disk.offlineFailed", diskNumber);
+                    return false;
+                }
+
+                // 让 partmgr 丢掉缓存的磁盘属性并重新枚举设备，卷/盘符消失得更干脆。
+                // 与 TryOnline 同口径：它只是"加速器"，失败不影响脱机本身，只落诊断日志
+                if (!PhysicalDiskControl.UpdateDiskProperties(probe))
+                {
+                    LogService.DebugFile($"磁盘 {diskNumber} 已脱机，但重新枚举（IOCTL_DISK_UPDATE_PROPERTIES）失败");
+                }
+
+                LogService.DebugFile($"磁盘 {diskNumber} 已确保脱机（persist=true；由“开机保持脱机”流程调用）");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = Locale.T("engine.disk.offlineFailedWithError", diskNumber, ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 复读**任意物理盘**此刻的属性（脱机 / 只读）——与 <see cref="TryGetCurrentAttributes"/> 的区别是
+        /// 它拿的是临时探针句柄，因此**只在我们没有独占该盘时可用**（"开机保持脱机"用它在动手前看一眼状态）。
+        /// </summary>
+        /// <returns>读到返回 <c>true</c> 并填出两项；失败返回 <c>false</c>（不抛）</returns>
+        public static bool TryGetAttributes(int diskNumber, out bool isOffline, out bool isReadOnly)
+        {
+            isOffline = false;
+            isReadOnly = false;
+            try
+            {
+                using SafeFileHandle probe = CreateProbeHandle(diskNumber);
+                if (probe.IsInvalid) return false;
+
+                bool isOnline = PhysicalDiskControl.GetOnlineStatus(probe, out isReadOnly);
+                isOffline = !isOnline;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 把盘**整盘脱机**（不改盘上任何数据，只改"系统要不要把它挂起来"这个属性）。
+        /// <c>persist = true</c> 是硬要求：盘归本程序管 ⇒ 程序没运行期间没人能写它 ⇒ 跨重启的 L2 账本才敢采信
+        /// （见类注释）；同时也让"开机保持脱机"在进程退出后依然成立。
+        /// </summary>
+        private static bool OfflineForTakeover(SafeFileHandle probe)
+            => PhysicalDiskControl.SetOnlineStatus(probe, online: false, persist: true);
 
         /// <summary>
         /// 复读**本句柄对应的磁盘**此刻的属性（脱机 / 只读）。
@@ -846,6 +943,70 @@ namespace FlyDisk.Engine
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool WriteFile(SafeFileHandle hFile, IntPtr lpBuffer, uint nNumberOfBytesToWrite, out uint lpNumberOfBytesWritten, IntPtr lpOverlapped);
+
+        /// <summary>脱机之后、去独占打开之前先等多久（毫秒）：卷退场与设备栈重枚举都是**异步**的，立刻打开必撞共享冲突</summary>
+        private const int OfflineSettleMs = 800;
+
+        /// <summary>独占打开的重试次数与间隔（毫秒）：给系统一点时间把手放开</summary>
+        private const int ExclusiveOpenAttempts = 4;
+        private const int ExclusiveOpenRetryMs = 400;
+
+        /// <summary>
+        /// 拿不到独占时的**退化共享模式**：允许别人的读写与删除。
+        ///
+        /// 为什么必须"允许写"：只要还有进程以写方式持有这块盘的句柄，任何"不允许写"的打开请求都会被
+        /// Windows 直接拒掉（<c>ERROR_SHARING_VIOLATION 32</c>）——这正是"无法独占打开"的常见成因。
+        /// 数据安全仍由**脱机**保证（卷已退场，别的程序拿不到文件系统），退化本身会如实落诊断日志。
+        /// </summary>
+        private const FileShare FallbackShare = FileShare.ReadWrite | FileShare.Delete;
+
+        /// <summary>
+        /// 尝试**独占**打开（<c>FILE_SHARE_NONE</c>）：失败就等一拍再试，最多 <see cref="ExclusiveOpenAttempts"/> 次。
+        /// 返回 null 表示始终没拿到（调用方退化为共享打开），并把最后一次错误码写进 <paramref name="lastError"/>。
+        /// </summary>
+        private static SafeFileHandle? TryOpenExclusive(int diskNumber, out int lastError)
+        {
+            lastError = 0;
+            for (int attempt = 1; attempt <= ExclusiveOpenAttempts; attempt++)
+            {
+                SafeFileHandle handle = CreateDiskHandle(diskNumber, FileAccess.ReadWrite, FileShare.None, writeThrough: true);
+                if (!handle.IsInvalid)
+                {
+                    if (attempt > 1)
+                    {
+                        LogService.DebugFile($"磁盘 {diskNumber} 第 {attempt} 次尝试独占打开成功");
+                    }
+                    return handle;
+                }
+
+                lastError = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                if (attempt < ExclusiveOpenAttempts)
+                {
+                    LogService.DebugFile($"磁盘 {diskNumber} 独占打开第 {attempt}/{ExclusiveOpenAttempts} 次失败（错误 {lastError}），稍后重试");
+                    Thread.Sleep(ExclusiveOpenRetryMs);
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 打开一个**临时探针句柄**（改磁盘属性用：脱机 / 联机 / 查询）。
+        ///
+        /// 共享模式必须是 <c>FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE</c>：
+        /// 盘上卷正被系统或别的程序打开着是常态（卷管理器、文件系统、杀软扫描、索引服务……），
+        /// 只要我们不声明"允许别人写"，<see cref="CreateFile"/> 就会以
+        /// <c>ERROR_SHARING_VIOLATION (32)</c> 直接失败——现象就是"使磁盘 N 脱机前无法获得写权限"。
+        /// 句柄是临时的、只用来发一条 IOCTL，放宽共享不会削弱任何独占保证：
+        /// 真正的独占是 <see cref="Open"/> 里那次 <c>FileShare.None</c> 的打开。
+        /// </summary>
+        private static SafeFileHandle CreateAttributeHandle(int diskNumber)
+            => CreateDiskHandle(diskNumber, FileAccess.ReadWrite,
+                FileShare.ReadWrite | FileShare.Delete);
+
+        /// <summary>只查询信息用的探针句柄（<see cref="Probe"/>；同样是临时句柄，共享从宽）</summary>
+        private static SafeFileHandle CreateProbeHandle(int diskNumber)
+            => CreateDiskHandle(diskNumber, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
         private static SafeFileHandle CreateDiskHandle(int diskNumber, FileAccess access, FileShare share, bool writeThrough = false)
             => CreateHandle($@"\\.\PhysicalDrive{diskNumber}", GetDesiredAccess(access), (uint)share, writeThrough);

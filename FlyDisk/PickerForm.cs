@@ -34,7 +34,9 @@ namespace FlyDisk
     /// - **远程选盘**：列**对端磁盘**（配对成功后由对端现取一份最新的清单）；
     /// - **「校验 L2」选盘**：本地形态，选要校验哪块盘；
     /// - **「重新联机源盘」**：本地形态 + <c>offlineOnly: true</c>，只列脱机盘（见 后续待办.md 第十二节）；
-    /// - **「管理 L2」选缓存**：列整机上找到的每一份 L2 缓存目录（见 <c>L2Manage</c>）。
+    /// - **「管理 L2」选缓存**：列整机上找到的每一份 L2 缓存目录（见 <c>L2Manage</c>）；
+    /// - **「开机目标盘」多选**：本地形态 + 多选构造，一次勾多块（结果在 <c>SelectedDisks</c>，
+    ///   供设置窗口的「选择硬盘…」用；见 <c>BootDiskPreparation</c>）。
     ///
     /// 为什么**本地选盘每次点「启动加速」都要弹一次**（见 后续待办.md 第一节的"选盘时机"）：
     /// 用户改过配置后可能隔几天才点启动，很容易忘了当时选的是哪块盘；把选择动作放在启动的同一刻，
@@ -92,8 +94,14 @@ namespace FlyDisk
         /// </summary>
         private bool _detailReady;
 
-        /// <summary>本地形态：用户选定的本机磁盘；取消时为 null</summary>
+        /// <summary>本地形态：用户选定的本机磁盘；取消时为 null（多选模式下 = <see cref="SelectedDisks"/> 的第一块）</summary>
         public PhysicalDiskInfo? SelectedDisk { get; private set; }
+
+        /// <summary>【多选模式】用户选定的全部本机磁盘（顺序跟随列表；单选模式下是 0 或 1 项）</summary>
+        public List<PhysicalDiskInfo> SelectedDisks { get; } = new();
+
+        /// <summary>是否多选（只有「开机目标盘」用；见设置窗口的「选择硬盘…」）</summary>
+        private readonly bool _multiSelect;
 
         /// <summary>远程形态：用户选定的对端磁盘；取消时为 null</summary>
         public RemoteDiskInfo? SelectedRemoteDisk { get; private set; }
@@ -115,14 +123,40 @@ namespace FlyDisk
         /// </param>
         public PickerForm(IReadOnlyList<PhysicalDiskInfo> disks, string identityToPreselect,
             bool offlineOnly = false, int l2CacheDiskNumber = -1)
+            : this(disks,
+                   identityToPreselect.Length > 0 ? new List<string> { identityToPreselect } : new List<string>(),
+                   offlineOnly, l2CacheDiskNumber, multiSelect: false)
+        {
+        }
+
+        /// <summary>
+        /// 【多选形态】同一份本机磁盘清单，但允许**一次选多块**（设置窗口的「选择硬盘…」用它选"开机目标盘"）。
+        /// 选中的结果在 <see cref="SelectedDisks"/>；<see cref="SelectedDisk"/> 仍是第一块，方便调用方只看一块。
+        /// </summary>
+        /// <param name="disks">已枚举好的本机物理盘</param>
+        /// <param name="identitiesToPreselect">已被记录的开机目标盘（配置里的身份串），用来自动勾选</param>
+        /// <param name="l2CacheDiskNumber">配置里 L2 缓存目录所在的那块盘（-1 = 未启用 / 查不到）；该盘会被标成不能加速</param>
+        public PickerForm(IReadOnlyList<PhysicalDiskInfo> disks, IReadOnlyList<string> identitiesToPreselect,
+            int l2CacheDiskNumber)
+            : this(disks, identitiesToPreselect, offlineOnly: false, l2CacheDiskNumber, multiSelect: true)
+        {
+        }
+
+        /// <summary>唯一的实现体：本地清单 + 预选（单个或多选）+ 是否只列脱机盘 + 是否多选</summary>
+        private PickerForm(IReadOnlyList<PhysicalDiskInfo> disks, IReadOnlyList<string> identitiesToPreselect,
+            bool offlineOnly, int l2CacheDiskNumber, bool multiSelect)
             : this(offlineOnly ? "selectDisk.title.online" : "selectDisk.title.local")
         {
+            _multiSelect = multiSelect;
+            // ListBox 默认只允许单选（SelectionMode.One）；多选时改 Extended：Ctrl/Shift 点选，也支持拖动框选
+            if (multiSelect) _list.SelectionMode = SelectionMode.MultiExtended;
+
             _emptyTextKey = offlineOnly ? "selectDisk.noOfflineDisks" : "selectDisk.noDisks";
             _l2CacheDiskNumber = l2CacheDiskNumber;
             // offlineOnly（重新联机）模式下用不到，但算一次也无妨：分页文件盘恰恰是最该联机回来的那块
             _pageFileDiskNumbers = PhysicalDiskHandle.GetPageFileDiskNumbers();
 
-            int preselect = -1;
+            var preselect = new List<int>();
             for (int i = 0; i < disks.Count; i++)
             {
                 PhysicalDiskInfo info = disks[i];
@@ -153,18 +187,28 @@ namespace FlyDisk
                     Detail = detail
                 });
 
-                if (identityToPreselect.Length > 0 &&
-                    PhysicalDiskHandle.DescribeIdentity(info) == identityToPreselect)
+                if (identitiesToPreselect.Count > 0 && MatchesIdentity(info, identitiesToPreselect))
                 {
                     // 记的必须是 **_entries 的下标**，不是 disks 的下标：offlineOnly 模式下联机盘被
                     // 上面的 continue 跳过，两个下标会错位；错位后赋给 ListBox.SelectedIndex 会越界
                     // （抛 ArgumentOutOfRangeException），而异常又正好被调用方那个 try 兜成
                     // "枚举物理盘失败"，文不对题、极难定位。
-                    preselect = _entries.Count - 1;
+                    preselect.Add(_entries.Count - 1);
                 }
             }
 
             FinishFill(preselect);
+        }
+
+        /// <summary>该盘的身份串是否在预选清单里（身份串的生成与比对都走同一处，见 DescribeIdentity）</summary>
+        private static bool MatchesIdentity(PhysicalDiskInfo info, IReadOnlyList<string> identities)
+        {
+            string identity = PhysicalDiskHandle.DescribeIdentity(info);
+            for (int i = 0; i < identities.Count; i++)
+            {
+                if (string.Equals(identities[i], identity, StringComparison.Ordinal)) return true;
+            }
+            return false;
         }
 
         /// <summary>【远程形态】列出**对端**磁盘</summary>
@@ -197,7 +241,7 @@ namespace FlyDisk
                 if (identityToPreselect.Length > 0 && info.Identity == identityToPreselect) preselect = i;
             }
 
-            FinishFill(preselect);
+            FinishFill(preselect >= 0 ? new List<int> { preselect } : new List<int>());
         }
 
         /// <summary>
@@ -224,7 +268,7 @@ namespace FlyDisk
                 });
             }
 
-            FinishFill(caches.Count > 0 ? 0 : -1);
+            FinishFill(caches.Count > 0 ? new List<int> { 0 } : new List<int>());
         }
 
         /// <summary>
@@ -275,7 +319,7 @@ namespace FlyDisk
             CancelButton = _cancel;
         }
 
-        private void FinishFill(int preselect)
+        private void FinishFill(IReadOnlyList<int> preselect)
         {
             foreach (Entry entry in _entries) _list.Items.Add(entry.Text);
 
@@ -285,7 +329,18 @@ namespace FlyDisk
                 return;
             }
 
-            if (preselect >= 0) _list.SelectedIndex = preselect;
+            if (_multiSelect && preselect.Count > 0)
+            {
+                // 多选：把配置里记着的那些盘逐个勾上（SetSelected 不会清掉别的选中项）
+                foreach (int index in preselect)
+                {
+                    if (index >= 0 && index < _list.Items.Count) _list.SetSelected(index, true);
+                }
+            }
+            else if (!_multiSelect && preselect.Count > 0 && preselect[0] >= 0)
+            {
+                _list.SelectedIndex = preselect[0];
+            }
             else
             {
                 int first = _entries.FindIndex(e => e.Selectable);
@@ -436,8 +491,23 @@ namespace FlyDisk
             }
 
             Entry entry = _entries[index];
-            _ok.Enabled = entry.Selectable;
+            // 单选：看当前这项能不能选。多选：**选中的每一项都必须能选**——否则会出现
+            // "用户勾了系统盘、点确定，结果那块盘被悄悄丢掉"的错觉（宁可不让点，让用户自己摘掉它）。
+            _ok.Enabled = _multiSelect ? SelectionAllSelectable() : entry.Selectable;
             if (_detailReady) ShowDetail(entry.Detail);
+        }
+
+        /// <summary>多选模式下：选中的项是否全都可选（且至少有选中一项）</summary>
+        private bool SelectionAllSelectable()
+        {
+            bool any = false;
+            foreach (int index in _list.SelectedIndices)
+            {
+                if (index < 0 || index >= _entries.Count) continue;
+                if (!_entries[index].Selectable) return false;
+                any = true;
+            }
+            return any;
         }
 
         /// <summary>
@@ -508,12 +578,33 @@ namespace FlyDisk
 
         private void Accept()
         {
-            int index = _list.SelectedIndex;
-            if (index < 0 || index >= _entries.Count || !_entries[index].Selectable) return;
+            if (_multiSelect)
+            {
+                // 多选（「开机目标盘」）：把选中的本机盘全部收下；一块都没选就什么都不做（不关闭对话框）
+                SelectedDisks.Clear();
+                foreach (int index in _list.SelectedIndices)
+                {
+                    if (index < 0 || index >= _entries.Count) continue;
+                    Entry entry = _entries[index];
+                    if (!entry.Selectable || entry.Local == null) continue;
+                    SelectedDisks.Add(entry.Local);
+                }
+                if (SelectedDisks.Count == 0) return;
 
-            SelectedDisk = _entries[index].Local;
-            SelectedRemoteDisk = _entries[index].Remote;
-            SelectedL2Cache = _entries[index].L2Cache;
+                // 单选调用方（启动加速 / 重新联机 / L2 校验）只看 SelectedDisk：这里取第一块，
+                // 于是"多选"对它们是透明的（它们本来就用不到第二块）
+                SelectedDisk = SelectedDisks[0];
+            }
+            else
+            {
+                int index = _list.SelectedIndex;
+                if (index < 0 || index >= _entries.Count || !_entries[index].Selectable) return;
+
+                SelectedDisk = _entries[index].Local;
+                SelectedRemoteDisk = _entries[index].Remote;
+                SelectedL2Cache = _entries[index].L2Cache;
+            }
+
             DialogResult = DialogResult.OK;
             Close();
         }

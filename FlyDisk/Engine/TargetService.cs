@@ -821,6 +821,16 @@ namespace FlyDisk.Engine
             LogService.DebugFile($"克隆盘检查：新出现的磁盘 {diskNumber}（{disk.Model}，{disk.SizeText}），" +
                                  $"脱机={(disk.IsOnline ? "否" : "是")}，只读={(disk.IsReadOnly ? "是" : "否")}");
 
+            // **多盘同时加速**（见 Form1.LocalSession）：每个会话是独立引擎，而"登录前后的盘号差集"是**全局**的
+            // ——它会看到别的会话的克隆盘。这里按**设备身份**把不属于本会话的新盘滤掉，否则会张冠李戴地告警。
+            if (!LooksLikeCloneOfThisSource(disk))
+            {
+                LogService.DebugFile(
+                    $"克隆盘检查：磁盘 {diskNumber} 与本源盘（{_sourceInfo?.Model}，{_sourceInfo?.SizeBytes} B）不符，" +
+                    "判定为其它会话的克隆盘，忽略");
+                return;
+            }
+
             // 只读与"冗余路径"共现（实测），但理论上也可能单独出现，故分开判、分开说
             if (!disk.IsOnline)
             {
@@ -830,6 +840,26 @@ namespace FlyDisk.Engine
             {
                 CloneDiskWarning = Locale.T("engine.start.cloneDiskReadOnly", diskNumber);
             }
+        }
+
+        /// <summary>
+        /// 这块"新出现"的盘是不是**本会话源盘**的克隆盘：型号 + 容量与源盘一致即可（序列号通常也一致，
+        /// 但可能为空，所以不拿它当必要条件）。
+        ///
+        /// 为什么要这道筛：盘号差集是全机的，**多盘同时加速**时每个会话各有一个克隆盘，
+        /// 不筛就会把别人的克隆盘当成自己的来告警（也会让"克隆盘是不是正常"的结论错位）。
+        /// 拿不到源盘描述时**不筛**（宁可多报，不静默漏报）。
+        /// </summary>
+        private bool LooksLikeCloneOfThisSource(PhysicalDiskInfo disk)
+        {
+            BlockSourceInfo? source = _sourceInfo;
+            if (source == null) return true;
+
+            if (disk.SizeBytes != source.SizeBytes) return false;
+
+            string expected = source.ProductId.Trim().Length > 0 ? source.ProductId.Trim() : source.Model.Trim();
+            string actual = disk.ProductId.Trim().Length > 0 ? disk.ProductId.Trim() : disk.Model.Trim();
+            return string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

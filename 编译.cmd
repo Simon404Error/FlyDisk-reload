@@ -1,0 +1,1 @@
+dotnet publish FlyDisk\FlyDisk.csproj -c Release -r win-x64
