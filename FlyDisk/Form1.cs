@@ -98,10 +98,18 @@ namespace FlyDisk
 
         // ===== 托盘（加速期间关闭主窗口只是"缩到托盘"，程序与加速照常跑）=====
         /// <summary>
-        /// 通知区图标（见 <see cref="OnFormClosing"/>）：**只在主窗口缩到托盘时可见**，左键单击把主窗口叫回来。
-        /// 它**不是**退出入口——真正的退出是"先停止加速、再关窗口"。
+        /// 通知区图标（见 <see cref="OnFormClosing"/>）：**常驻**，左键单击把主窗口叫回来，
+        /// 右键菜单里的「完全关闭」是**唯一的真正退出入口**（见 <see cref="ExitFromTray"/>）。
         /// </summary>
         private readonly NotifyIcon _tray;
+
+        /// <summary>托盘右键菜单（文案随语言切换刷新）</summary>
+        private readonly ContextMenuStrip _trayMenu;
+        private readonly ToolStripMenuItem _trayShowItem;
+        private readonly ToolStripMenuItem _trayExitItem;
+
+        /// <summary>是否已经决定"完全退出"（只有托盘右键「完全关闭」会把它置真）</summary>
+        private bool _exitRequested;
 
         /// <summary>本窗体的控件文本登记表（见 <see cref="ILocalizable"/>；主窗体的文本几乎都是动态的，这里主要先留骨架）</summary>
         public Dictionary<string, List<Control>> TextBindings { get; } = new();
@@ -178,18 +186,27 @@ namespace FlyDisk
             _languageMenuItem.DropDownItems.Add(_enLanguageMenuItem);
             menuStrip1.Items.Add(_languageMenuItem);
 
-            // 托盘：加速期间关闭主窗口**不退出**，只是把窗口缩到通知区（见 OnFormClosing）；
-            // 真正退出的路径只有一条——**先点「停止加速」再关窗口**（那时 IsRunning 为假，走正常关闭），
-            // 所以这里不需要"退出"菜单项，只要能把窗口叫回来。
-            // **只在主窗口藏起来时才有这个图标**：窗口还在屏幕上时不占通知区，叫回窗口后立刻撤掉。
+            // 托盘：**关闭主窗口一律缩到通知区**（不退出），真正退出只有一条路——
+            // 托盘图标**右键 → 完全关闭**（见 ExitFromTray）。图标**常驻**（窗口在屏幕上时也在），
+            // 这样用户随时能右键退出；左键单击把主窗口叫回来。
             // **只会有主窗口进出托盘**——检查器是独立顶层窗口、悬浮方块归检查器自己管，都不跟着走。
             _tray = new NotifyIcon
             {
                 Icon = AppIcon.Current,   // 应用图标，随系统深浅主题（启动时定，见 Theming\AppIcon.cs）
                 Text = Locale.T("app.title", UpdateService.CurrentVersion),   // 与窗口标题同源（含版本号）
-                Visible = false,   // 开关交给 OnFormClosing / RestoreFromTray：窗口在哪，图标就在哪
+                Visible = true,   // 常驻：右键菜单是唯一的"完全关闭"入口
             };
-            // 左键单击即把主窗口叫回来（右键无动作，也就不需要 ContextMenuStrip）
+            _trayShowItem = new ToolStripMenuItem(Locale.T("main.tray.show"));
+            _trayShowItem.Click += (s, e) => RestoreFromTray();
+            _trayExitItem = new ToolStripMenuItem(Locale.T("main.tray.exit"));
+            _trayExitItem.Click += (s, e) => ExitFromTray();
+            _trayMenu = new ContextMenuStrip();
+            _trayMenu.Items.Add(_trayShowItem);
+            _trayMenu.Items.Add(new ToolStripSeparator());
+            _trayMenu.Items.Add(_trayExitItem);
+            _tray.ContextMenuStrip = _trayMenu;
+
+            // 左键单击即把主窗口叫回来（右键弹上面的菜单）
             _tray.MouseClick += (s, e) =>
             {
                 if (e.Button == MouseButtons.Left) RestoreFromTray();
@@ -246,6 +263,8 @@ namespace FlyDisk
             _tray.Text = Text;   // 通知区的悬停提示与窗口标题同源（切语言时一起刷）
             btnStartStop.Text = Locale.T("main.button.start");
             btnClearLog.Text = Locale.T("main.button.clearLog");
+            _trayShowItem.Text = Locale.T("main.tray.show");
+            _trayExitItem.Text = Locale.T("main.tray.exit");
             SetSubtitle(Locale.T("main.subtitle.local"));
 
             if (IsHandleCreated) RefreshStatus();
@@ -1994,13 +2013,13 @@ namespace FlyDisk
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            // 加速期间**关闭主窗口 = 缩到托盘**（不退出）：程序与加速都继续跑，窗口只是藏起来，
-            // 这样"手滑关掉"再也不会把盘留在脱机状态。
-            // 真正退出的路径只有一条：**先点「停止加速」，再关窗口**（那时 IsRunning 为假，走下面的正常关闭）。
-            if (e.CloseReason == CloseReason.UserClosing && (IsAnyTargetRunning || HasTargetWork))
+            // 关闭主窗口 = **缩到托盘**（不管有没有在加速）——这是本 fork 的口径：
+            // 真正退出只有一条路 —— 托盘图标**右键 → 完全关闭**（见 ExitFromTray，它会把 _exitRequested 置真）。
+            // 关机 / 重启 / 注销（CloseReason.WindowsShutDown 等）不拦：系统要收窗口就让它收。
+            if (!_exitRequested && e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
-                _tray.Visible = true;   // 窗口藏起来了，通知区补一个入口（窗口在屏幕上时它是隐藏的）
+                _tray.Visible = true;
                 Hide();   // **只藏主窗口**：检查器是独立顶层窗口、悬浮方块归检查器自己管，都不跟着走
                 return;
             }
@@ -2025,12 +2044,37 @@ namespace FlyDisk
             base.OnFormClosing(e);
         }
 
+        /// <summary>
+        /// 托盘右键「完全关闭」：**唯一的真正退出入口**（见 <see cref="OnFormClosing"/>）。
+        ///
+        /// 退出前若还在加速，走 <see cref="TargetService.TryStopForShutdown"/> 那条收尾路径
+        /// （摘 iSCSI 会话、落 L2 账本、**盘保持脱机**）：它不做"还有连接就拒绝停止"的守卫，
+        /// 且**绝不外抛**——用户已经明确要退出，不能因为发起程序登不出去就卡在托盘里。
+        /// </summary>
+        private void ExitFromTray()
+        {
+            _exitRequested = true;
+
+            if (IsAnyTargetRunning || HasTargetWork)
+            {
+                _target.TryStopForShutdown();
+                foreach (LocalSession session in _extraSessions)
+                {
+                    session.Target.TryStopForShutdown();
+                }
+                _extraSessions.Clear();
+            }
+
+            _tray.Visible = false;   // 退出后不该在通知区留一个点不动的死图标
+            Close();
+        }
+
         /// <summary>把主窗口从托盘叫回来（单击托盘图标；或第二个实例请我们到前台）</summary>
         private void RestoreFromTray()
         {
             Show();
             if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-            _tray.Visible = false;   // 窗口回到屏幕上，通知区图标随即撤掉
+            // 托盘图标**常驻**（不随窗口显示而撤掉）：右键菜单是唯一的"完全关闭"入口，必须一直够得着。
             Activate();
             BringToFront();
             // Activate/BringToFront 对一个"后台进程"未必真能把窗口提到最前（Windows 的前台抢占限制），
@@ -2065,6 +2109,7 @@ namespace FlyDisk
             _remoteListener = null;
             try { listener?.Stop(); } catch { /* 已经停了 */ }
             _tray.Dispose();   // Dispose 会一并把图标从通知区撤掉：进程退出后不该残留一个点不动的死图标
+            _trayMenu.Dispose();
             _inspector?.Dispose();
             base.OnFormClosed(e);
         }

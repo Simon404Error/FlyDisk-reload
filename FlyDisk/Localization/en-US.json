@@ -12,7 +12,7 @@
   "common.cancel": "Cancel",
   "common.close": "Close",
 
-  "app.title": "FlyDisk {0} - HDD Accelerator",
+  "app.title": "FlyDisk v{0} - HDD Accelerator",
 
   "main.subtitle.local": "—— HDD Block-Level Accelerator",
   "main.subtitle.remote": "—— Remote Accelerator",
@@ -480,6 +480,8 @@
   "main.log.l2UnusedLedgerKept": "User aborted: the disk's L2 ledger was left untouched and acceleration did not start",
   "main.log.l2UnusedLedgerInvalidated": "The disk's L2 ledger has been marked invalid (verification required the next time L2 accelerates it)",
   "main.button.clearLog": "Clear log",
+  "main.tray.show": "Show main window",
+  "main.tray.exit": "Exit completely",
   "main.button.stopAll": "Stop acceleration (all {0})",
   "main.status.multiRunning": "Accelerating multiple disks: {0}/{1} running",
   "main.log.multiDiskStartFailed": "Disk {0} failed to start (reason above).",

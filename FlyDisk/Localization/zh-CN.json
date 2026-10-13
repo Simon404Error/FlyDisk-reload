@@ -12,7 +12,7 @@
   "common.cancel": "取消",
   "common.close": "关闭",
 
-  "app.title": "FlyDisk {0} - 机械硬盘加速器",
+  "app.title": "FlyDisk v{0} - 机械硬盘加速器",
 
   "main.subtitle.local": "—— 机械硬盘块级加速器",
   "main.subtitle.remote": "—— 远程加速器",
@@ -480,6 +480,8 @@
   "main.log.l2UnusedLedgerKept": "用户选择终止：该盘的 L2 账本保持原样，加速未启动",
   "main.log.l2UnusedLedgerInvalidated": "已把该盘的 L2 账本标记为失效（下次启用 L2 加速它时需要先校验）",
   "main.button.clearLog": "清空日志",
+  "main.tray.show": "显示主窗口",
+  "main.tray.exit": "完全关闭（退出程序）",
   "main.button.stopAll": "停止加速（全部 {0} 块）",
   "main.status.multiRunning": "多盘同时加速：{0}/{1} 块在运行",
   "main.log.multiDiskStartFailed": "磁盘 {0} 启动失败（原因见上）。",
